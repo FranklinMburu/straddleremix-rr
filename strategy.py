@@ -49,6 +49,7 @@ class StraddleStrategy:
         }
         
         self.state_file = f"state_{self.connector.magic}.json"
+        self.current_account_id = None
         self.logs = []
         self.load_state()
 
@@ -73,7 +74,8 @@ class StraddleStrategy:
             "system_halted": self.system_halted,
             "oco_lock": self.oco_lock,
             "execution_lock": self.execution_lock,
-            "current_range": self.current_range
+            "current_range": self.current_range,
+            "current_account_id": self.current_account_id
         }
         try:
             with open(self.state_file, 'w') as f:
@@ -98,27 +100,65 @@ class StraddleStrategy:
                     self.oco_lock = state.get("oco_lock", False)
                     self.execution_lock = state.get("execution_lock", False)
                     self.current_range = state.get("current_range")
+                    self.current_account_id = state.get("current_account_id")
                 print(f"System State Recovered: {self.state_file}")
             except Exception as e:
                 print(f"Persistence Error (Load): {e}")
 
     def update_daily_balance(self):
         now = time.time()
+        acc = self.connector.get_account()
+        
+        if acc:
+            # Account Switch Detection (Primary Guard)
+            login_id = getattr(acc, 'login', None)
+            if self.current_account_id is not None and login_id != self.current_account_id:
+                self.add_log(f"ACCOUNT SWITCH DETECTED: {self.current_account_id} -> {login_id}. Performing full recalibration.")
+                self.reset_entire_state(acc)
+                return
+
+            self.current_account_id = login_id
+
         if self.day_start_balance is None or (now - self.last_day_check > 86400):
-            acc = self.connector.get_account()
             if acc:
                 self.day_start_balance = acc.balance
                 self.last_day_check = now
                 
-                # If current equity is much lower than peak, but we aren't in a massive trade,
+                # If current equity is significantly different from peak, and we aren't in a massive negative trade,
                 # it's likely a withdrawal or account change. Sync peak to avoid false HALT.
-                if self.peak_equity > acc.equity:
-                    print(f"Equity Sync: Adjusting peak {self.peak_equity:.2f} to {acc.equity:.2f} to prevent false drawdown halt.")
+                equity_diff_pct = abs(self.peak_equity - acc.equity) / (self.peak_equity if self.peak_equity > 0 else 1)
+                
+                # If difference is > 20% and we have no active trade, it's likely a manual account change
+                if equity_diff_pct > 0.20 and not self.active_trade:
+                    print(f"Equity Sync: Adjusting peak {self.peak_equity:.2f} to {acc.equity:.2f}")
                     self.peak_equity = acc.equity
                     self.max_drawdown_observed = 0.0
+                elif self.peak_equity > acc.equity and not self.active_trade:
+                    # Minor drift adjustment
+                    self.peak_equity = acc.equity
                 
                 print(f"Daily Baseline Reset: {self.day_start_balance:.2f}")
                 self.save_state()
+
+    def reset_entire_state(self, acc):
+        """Hard reset for all tracking metrics on account switch"""
+        self.peak_equity = acc.equity
+        self.day_start_balance = acc.balance
+        self.max_drawdown_observed = 0.0
+        self.system_halted = False
+        self.risk_multiplier = 1.0
+        self.consecutive_losses = 0
+        self.stats = {
+            "total_trades": 0,
+            "wins": 0,
+            "losses": 0,
+            "total_r": 0.0,
+            "win_r_sum": 0.0,
+            "loss_r_sum": 0.0
+        }
+        self.r_values = []
+        self.save_state()
+        self.add_log("System state fully purged and recalibrated for new account.")
 
     def update_spread_rolling(self, current_spread):
         self.spread_history.append(current_spread)

@@ -7,18 +7,47 @@ async function startServer() {
   const app = express();
   const PORT = 3000;
 
-  console.log("🚀 Starting MT5 Trading Engine (Python)...");
-  
-  // Robust python detection
-  const pythonCmd = process.platform === "win32" ? "python" : "python3";
-  
-  const pythonProcess = spawn(pythonCmd, ["main.py"], {
-    stdio: "inherit",
-    env: { ...process.env, PYTHONUNBUFFERED: "1" }
+  let pythonProcess: any = null;
+
+  const startPython = () => {
+    console.log("🚀 Starting MT5 Trading Engine (Python)...");
+    const pythonCmd = process.platform === "win32" ? "python" : "python3";
+    
+    pythonProcess = spawn(pythonCmd, ["main.py"], {
+      stdio: "inherit",
+      env: { ...process.env, PYTHONUNBUFFERED: "1" }
+    });
+
+    pythonProcess.on("error", (err: any) => {
+      console.error("❌ Failed to start Python engine:", err);
+    });
+
+    pythonProcess.on("exit", (code: number) => {
+      if (code !== 0 && code !== null) {
+        console.log(`⚠️ Python engine exited with code ${code}. Restarting in 5s...`);
+        setTimeout(startPython, 5000);
+      }
+    });
+  };
+
+  startPython();
+
+  // Handle cleanup on Exit
+  const cleanup = () => {
+    if (pythonProcess) {
+      console.log("🛑 Killing Python engine...");
+      pythonProcess.kill();
+    }
+  };
+
+  process.on("SIGINT", () => {
+    cleanup();
+    process.exit();
   });
 
-  pythonProcess.on("error", (err) => {
-    console.error("❌ Failed to start Python engine:", err);
+  process.on("SIGTERM", () => {
+    cleanup();
+    process.exit();
   });
 
   // Vite middleware for development
