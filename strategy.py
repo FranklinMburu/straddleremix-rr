@@ -716,7 +716,19 @@ class StraddleStrategy:
         self.save_state()
 
     def run(self):
-        # 0. HARD GUARD: Do not process if ANY position or order exists for this magic
+        # 0. HARD ACCOUNT SAFETY GUARD
+        if not self.connector.is_account_safe():
+            acc = self.connector.get_account()
+            actual_id = getattr(acc, 'login', 'Unknown') if acc else 'Unknown'
+            self.add_log(f"🔴 SECURITY BLOCK: Account mismatch ({actual_id} != {config.MT5_LOGIN}).")
+            self.system_halted = True
+            return
+
+        # 0.5. DO NOT PROCESS IF HALTED
+        if self.system_halted:
+            return
+
+        # 1. Market Status Check
         positions = self.connector.get_positions()
         orders = self.connector.get_orders()
         
@@ -847,31 +859,44 @@ class StraddleStrategy:
             deviation=dev
         )
         
-        if res_buy and res_sell:
+        # Validation: Both must return an object AND a success code
+        buy_ok = res_buy and res_buy.retcode == mt5.TRADE_RETCODE_DONE
+        sell_ok = res_sell and res_sell.retcode == mt5.TRADE_RETCODE_DONE
+
+        if buy_ok and sell_ok:
             self.execution_lock = True
             self.add_log(f"EXEC: Pending straddle placed (Size: {lot} lots @ {buy_p:.5f} / {sell_p:.5f})")
             self.save_state()
             print(f"BUY STOP @ {buy_p:.2f} | SL: {buy_sl:.2f} | TP: {buy_tp:.2f}")
             print(f"SELL STOP @ {sell_p:.2f} | SL: {sell_sl:.2f} | TP: {sell_tp:.2f}")
-            print(f"Spread: {spread_pts:.0f} | Risk: {self.risk_multiplier*100:.0f}% | LOT: {lot}")
+            print(f"Spread: {spread_pts:.0f} | Multiplier: {self.risk_multiplier*100:.0f}% | LOT: {lot}")
         else:
-            print("ERROR: Failed to place straddle orders.")
+            self.add_log(f"ERROR: Straddle placement failed. Buy: {res_buy.retcode if res_buy else 'None'} | Sell: {res_sell.retcode if res_sell else 'None'}")
+            # If one side failed, try to clear the other side to avoid unhedged state
+            self.connector.cancel_all_pending()
             self.execution_lock = False
             return
 
         # Post-placement Verification (Institutional Wait Loop)
         verified = False
         matched_live = []
-        for attempt in range(5): # Up to 2.5 seconds of verification window
+        for attempt in range(6): 
             time.sleep(0.5)
             live_orders = self.connector.get_orders()
             matched_live = [o for o in live_orders if o.magic == self.connector.magic] if live_orders else []
+            
             if len(matched_live) >= 2:
                 verified = True
                 break
+            else:
+                print(f"  Verification attempt {attempt+1}: Found {len(matched_live)}/2 orders in book...")
             
         if not verified:
-            print(f"CRITICAL: Placement verification delay (Found {len(matched_live)}/2). Resetting for re-sync.")
+            all_orders = self.connector.get_orders(symbol="ALL") # Try without symbol filter
+            total_in_terminal = len(all_orders) if all_orders else 0
+            self.add_log(f"CRITICAL: Verification FAILED. Found {len(matched_live)} matched. Total terminal orders: {total_in_terminal}.")
+            self.add_log("Emergency cleanup initiated.")
+            self.connector.cancel_all_pending()
             self.execution_lock = False
             self.save_state()
             return

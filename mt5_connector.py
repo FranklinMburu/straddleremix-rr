@@ -248,7 +248,13 @@ class MT5Connector:
             }
             res = mt5.order_send(request)
             if res is None:
-                print(f"MT5: order_send returned None. Check terminal connection / logs.")
+                print(f"MT5: order_send returned None for {order_type} on {self.symbol}. Terminal might be disconnected.")
+                return None
+                
+            if res.retcode != mt5.TRADE_RETCODE_DONE:
+                print(f"MT5 REJECTION: Request ({order_type} @ {price}) failed with retcode {res.retcode}.")
+                print(f"MT5 ERROR: {mt5.last_error()}")
+                # Common errors: 10015 (Invalid stops), 10027 (No quotes), 10018 (Market closed)
             return res
         except Exception as e:
             print(f"MT5 Exception in place_order: {e}")
@@ -261,9 +267,12 @@ class MT5Connector:
         if self.mock_mode: return self._mock_positions
         return mt5.positions_get(symbol=self.symbol)
 
-    def get_orders(self):
+    def get_orders(self, symbol=None):
         if self.mock_mode: return self._mock_orders
-        return mt5.orders_get(symbol=self.symbol)
+        target_symbol = symbol if symbol is not None else self.symbol
+        if target_symbol == "ALL":
+            return mt5.orders_get()
+        return mt5.orders_get(symbol=target_symbol)
 
     def cancel_order(self, ticket, retries=3):
         if self.mock_mode:
