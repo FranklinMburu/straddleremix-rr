@@ -2,10 +2,12 @@ import express from "express";
 import { createServer as createViteServer } from "vite";
 import { spawn } from "child_process";
 import path from "path";
+import { createProxyMiddleware } from "http-proxy-middleware";
 
 async function startServer() {
   const app = express();
   const PORT = 3000;
+  const PYTHON_PORT = 8000;
 
   let pythonProcess: any = null;
 
@@ -50,18 +52,27 @@ async function startServer() {
     process.exit();
   });
 
+  // API Proxy to Python Engine
+  app.use(
+    "/api",
+    createProxyMiddleware({
+      target: `http://127.0.0.1:${PYTHON_PORT}`,
+      changeOrigin: true,
+      on: {
+        error: (err, req, res: any) => {
+          res.status(503).json({ 
+            error: "Python Backend Unreachable", 
+            details: "The MT5 Engine is initializing or failed to start. Check server logs." 
+          });
+        }
+      }
+    })
+  );
+
   // Vite middleware for development
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
-      server: { 
-        middlewareMode: true,
-        proxy: {
-          '/api': {
-            target: 'http://localhost:8000',
-            changeOrigin: true,
-          }
-        }
-      },
+      server: { middlewareMode: true },
       appType: "spa",
     });
     app.use(vite.middlewares);

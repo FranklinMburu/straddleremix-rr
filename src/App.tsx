@@ -71,6 +71,7 @@ interface EngineStatus {
   active_trade: any | null;
   active_trade_meta: any;
   raw_orders: any[];
+  logs: string[];
 }
 
 export default function App() {
