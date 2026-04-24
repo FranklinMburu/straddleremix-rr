@@ -97,18 +97,17 @@ async def get_stats():
 
 @app.post("/api/reset")
 async def reset_system():
-    strategy.system_halted = False
     acc = connector.get_account()
     if acc:
-        strategy.peak_equity = acc.equity
-        strategy.day_start_balance = acc.balance
+        strategy.reset_entire_state(acc)
     else:
+        strategy.system_halted = False
         strategy.peak_equity = 0.0
+        strategy.max_drawdown_observed = 0.0
+        strategy.risk_multiplier = 1.0
+        strategy.consecutive_losses = 0
+        strategy.save_state()
         
-    strategy.max_drawdown_observed = 0.0
-    strategy.risk_multiplier = 1.0
-    strategy.consecutive_losses = 0
-    strategy.save_state()
     strategy.add_log("USER ACTION: System Overriden & Fully Calibrated.")
     return {"status": "reset_complete"}
 

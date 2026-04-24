@@ -1,7 +1,9 @@
 import os
-from dotenv import load_dotenv
-
-load_dotenv()
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    print("⚠️ Warning: python-dotenv not found. Environment variables must be set manually.")
 
 def get_int_env(key, default):
     val = os.getenv(key, "")

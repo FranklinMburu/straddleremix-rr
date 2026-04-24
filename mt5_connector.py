@@ -67,7 +67,17 @@ class MT5Connector:
             print("Note: This library requires Windows and a local MT5 Terminal.")
             return False
         
-        print(f"✅ MT5 Connected Successfully to {config.MT5_SERVER} (Account: {config.MT5_LOGIN})")
+        print(f"✅ MT5 Connected Successfully to {config.MT5_SERVER}")
+        
+        # Verify actual account
+        acc = mt5.account_info()
+        if acc:
+            actual_login = getattr(acc, 'login', 'Unknown')
+            print(f"📊 Live MT5 Terminal Account: {actual_login}")
+            if actual_login != config.MT5_LOGIN and config.MT5_LOGIN != 0:
+                print(f"🔴 WARNING: Requested account {config.MT5_LOGIN} but Terminal is on {actual_login}!")
+                print("Please manually switch your MT5 Desktop Terminal to the correct account.")
+        
         self.connected = True
         return True
 

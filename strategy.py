@@ -113,7 +113,7 @@ class StraddleStrategy:
             # Account Switch Detection (Primary Guard)
             login_id = getattr(acc, 'login', None)
             if self.current_account_id is not None and login_id != self.current_account_id:
-                self.add_log(f"ACCOUNT SWITCH DETECTED: {self.current_account_id} -> {login_id}. Performing full recalibration.")
+                print(f"ACCOUNT SWITCH DETECTED: {self.current_account_id} -> {login_id}. Performing full recalibration.")
                 self.reset_entire_state(acc)
                 return
 
@@ -133,6 +133,7 @@ class StraddleStrategy:
                     print(f"Equity Sync: Adjusting peak {self.peak_equity:.2f} to {acc.equity:.2f}")
                     self.peak_equity = acc.equity
                     self.max_drawdown_observed = 0.0
+                    self.system_halted = False # Clear halt if it was due to withdrawal
                 elif self.peak_equity > acc.equity and not self.active_trade:
                     # Minor drift adjustment
                     self.peak_equity = acc.equity
