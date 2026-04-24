@@ -54,6 +54,9 @@ interface EngineStatus {
     equity: number;
     profit: number;
     total_risk_pct: number;
+    login: string | number;
+    expected_login: string | number;
+    account_mismatch: boolean;
   };
   stats: {
     total_trades: number;
@@ -190,6 +193,29 @@ export default function App() {
               <p className="font-bold uppercase tracking-widest text-xs">{error}</p>
             </motion.div>
           )}
+          {data?.account.account_mismatch && (
+            <motion.div 
+              initial={{ height: 0, opacity: 0 }}
+              animate={{ height: 'auto', opacity: 1 }}
+              exit={{ height: 0, opacity: 0 }}
+              className="bg-amber-500 border border-amber-600 px-6 py-4 rounded-2xl flex items-center justify-between text-white mb-8 shadow-lg shadow-amber-500/20"
+            >
+              <div className="flex items-center gap-4">
+                <AlertTriangle className="w-6 h-6" />
+                <div>
+                  <p className="font-black uppercase tracking-tight text-sm">Target Account Misalignment</p>
+                  <p className="text-[10px] font-bold opacity-80 uppercase tracking-widest">
+                    Trading BLOCKED. Terminal is on #{data.account.login}, but Engine expects #{data.account.expected_login}.
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2 bg-black/20 px-4 py-2 rounded-xl">
+                 <Lock className="w-3 h-3 text-amber-200" />
+                 <span className="text-[10px] font-black uppercase tracking-[0.2em]">Safety Lock Active</span>
+              </div>
+            </motion.div>
+          )}
+
           {data?.engine.system_halted && (
             <motion.div 
               initial={{ height: 0, opacity: 0 }}
@@ -221,29 +247,33 @@ export default function App() {
               label="Equity" 
               value={`$${data?.account.equity.toLocaleString()}`} 
               icon={<TrendingUp className="w-4 h-4" />} 
-              sub={`Profit: $${data?.account.profit.toFixed(2)}`}
+              sub={`Account: #${data?.account.login} | P: $${data?.account.profit.toFixed(2)}`}
               color="blue"
+              verified={!data?.account.account_mismatch}
             />
             <MetricBox 
               label="Active Risk" 
               value={`${data?.account.total_risk_pct.toFixed(2)}%`} 
               icon={<ShieldCheck className="w-4 h-4" />} 
-              sub={`Limit: ${(0.05 * 100).toFixed(0)}%`}
+              sub={`Limit: ${(0.05 * 100).toFixed(0)}% | Safe`}
               color={ (data?.account.total_risk_pct || 0) > 4 ? "rose" : "emerald" }
+              verified={!data?.account.account_mismatch}
             />
             <MetricBox 
               label="Win Rate" 
               value={`${((data?.stats.wins || 0) / (data?.stats.total_trades || 1) * 100).toFixed(1)}%`} 
               icon={<Target className="w-4 h-4" />} 
-              sub={`Trades: ${data?.stats.total_trades}`}
+              sub={`Trades: ${data?.stats.total_trades} (v1.0)`}
               color="purple"
+              verified={true}
             />
             <MetricBox 
               label="Expectancy" 
               value={`${data?.performance.expectancy.toFixed(2)}R`} 
               icon={<Gauge className="w-4 h-4" />} 
-              sub={`Std Dev: ${data?.performance.std_r.toFixed(2)}`}
+              sub={`Profile: ${data?.account.expected_login}`}
               color={ (data?.performance.expectancy || 0) > 0 ? "emerald" : "rose" }
+              verified={true}
             />
           </div>
 
@@ -439,7 +469,7 @@ export default function App() {
   );
 }
 
-function MetricBox({ label, value, icon, sub, color }: any) {
+function MetricBox({ label, value, icon, sub, color, verified }: any) {
   const colors: any = {
     blue: "text-blue-500 bg-blue-500/10 border-blue-500/20",
     emerald: "text-emerald-500 bg-emerald-500/10 border-emerald-500/20",
@@ -449,7 +479,12 @@ function MetricBox({ label, value, icon, sub, color }: any) {
   };
 
   return (
-    <div className="bg-slate-900/60 border border-white/5 p-6 rounded-3xl backdrop-blur-xl">
+    <div className="bg-slate-900/60 border border-white/5 p-6 rounded-3xl backdrop-blur-xl relative overflow-hidden">
+      {verified && (
+        <div className="absolute top-0 right-0 p-1">
+          <div className="w-2 h-2 bg-emerald-500 rounded-full shadow-lg shadow-emerald-500/20" />
+        </div>
+      )}
       <div className="flex items-center justify-between mb-4">
         <p className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-500">{label}</p>
         <div className={cn("p-2 rounded-xl border", colors[color])}>{icon}</div>

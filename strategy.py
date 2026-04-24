@@ -48,7 +48,7 @@ class StraddleStrategy:
             "loss_r_sum": 0.0
         }
         
-        self.state_file = f"state_{self.connector.magic}.json"
+        self.state_file = f"state_{self.connector.magic}_{config.MT5_LOGIN}.json"
         self.current_account_id = None
         self.logs = []
         self.load_state()
@@ -107,10 +107,19 @@ class StraddleStrategy:
 
     def update_daily_balance(self):
         now = time.time()
-        acc = self.connector.get_account()
         
+        # Hard Check: Is the account ID what we expect?
+        if not self.connector.is_account_safe():
+            acc = self.connector.get_account()
+            actual_id = getattr(acc, 'login', 'Unknown')
+            self.add_log(f"🔴 SECURITY HALT: Terminal is on Account {actual_id}, but Config expects {config.MT5_LOGIN}.")
+            self.add_log("Trading is blocked until accounts match.")
+            self.system_halted = True
+            return
+
+        acc = self.connector.get_account()
         if acc:
-            # Account Switch Detection (Primary Guard)
+            # Account Switch Detection (Refined)
             login_id = getattr(acc, 'login', None)
             if self.current_account_id is not None and login_id != self.current_account_id:
                 print(f"ACCOUNT SWITCH DETECTED: {self.current_account_id} -> {login_id}. Performing full recalibration.")

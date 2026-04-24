@@ -67,18 +67,43 @@ class MT5Connector:
             print("Note: This library requires Windows and a local MT5 Terminal.")
             return False
         
-        print(f"✅ MT5 Connected Successfully to {config.MT5_SERVER}")
-        
-        # Verify actual account
+        # Immediate Account Verification
         acc = mt5.account_info()
-        if acc:
-            actual_login = getattr(acc, 'login', 'Unknown')
-            print(f"📊 Live MT5 Terminal Account: {actual_login}")
-            if actual_login != config.MT5_LOGIN and config.MT5_LOGIN != 0:
-                print(f"🔴 WARNING: Requested account {config.MT5_LOGIN} but Terminal is on {actual_login}!")
-                print("Please manually switch your MT5 Desktop Terminal to the correct account.")
+        if not acc:
+            print("❌ Failed to get account info after initialization.")
+            return False
+            
+        actual_login = getattr(acc, 'login', 0)
+        expected_login = config.MT5_LOGIN
         
+        print(f"✅ MT5 Connected Successfully to {config.MT5_SERVER}")
+        print(f"📊 Live MT5 Terminal Account: {actual_login}")
+        
+        if expected_login != 0 and actual_login != expected_login:
+            print(f"🔴 CRITICAL ERROR: Account mismatch!")
+            print(f"   Configured: {expected_login}")
+            print(f"   Actual Terminal Account: {actual_login}")
+            print("   Trading will be BLOCKED until you switch the Terminal to the correct account.")
+            self.connected = False # Don't consider it connected if the account is wrong
+            return False
+            
         self.connected = True
+        return True
+
+    def is_account_safe(self):
+        """Strict check to ensure we are STILL on the correct account before any trade action"""
+        if self.mock_mode: return True
+        if not MT5_AVAILABLE: return False
+        
+        import config
+        acc = mt5.account_info()
+        if not acc: return False
+        
+        actual_login = getattr(acc, 'login', 0)
+        expected_login = config.MT5_LOGIN
+        
+        if expected_login != 0 and actual_login != expected_login:
+            return False
         return True
 
     def resolve_symbol(self):
@@ -168,6 +193,9 @@ class MT5Connector:
 
     def place_order(self, order_type, price, sl, tp, lot, deviation=10):
         if self.trade_lock: return None
+        if not self.is_account_safe():
+            print("❌ BLOCKED: Operation aborted due to account mismatch.")
+            return None
         self.trade_lock = True
         
         # Ensure volume is rounded correctly
@@ -245,6 +273,10 @@ class MT5Connector:
             r.retcode = mt5.TRADE_RETCODE_DONE
             return r
             
+        if not self.is_account_safe():
+            print("❌ BLOCKED: Cancellation aborted due to account mismatch.")
+            return None
+
         request = {"action": mt5.TRADE_ACTION_REMOVE, "order": ticket}
         
         for attempt in range(retries):
@@ -276,6 +308,11 @@ class MT5Connector:
         if self.mock_mode:
             self._mock_positions = [p for p in self._mock_positions if p.ticket != ticket]
             return True
+        
+        if not self.is_account_safe():
+            print("❌ BLOCKED: Closing aborted due to account mismatch.")
+            return None
+
         # Original logic...
         import time
         order_type = mt5.ORDER_TYPE_SELL if type == mt5.POSITION_TYPE_BUY else mt5.ORDER_TYPE_BUY
@@ -303,6 +340,11 @@ class MT5Connector:
                     p.sl = sl
                     p.tp = tp
             return True
+        
+        if not self.is_account_safe():
+            print("❌ BLOCKED: Modification aborted due to account mismatch.")
+            return None
+
         request = {
             "action": mt5.TRADE_ACTION_SLTP,
             "position": ticket,
