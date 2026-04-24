@@ -54,16 +54,18 @@ async function startServer() {
 
   // API Proxy to Python Engine
   app.use(
-    "/api",
     createProxyMiddleware({
       target: `http://127.0.0.1:${PYTHON_PORT}`,
       changeOrigin: true,
+      pathFilter: "/api",
       on: {
         error: (err, req, res: any) => {
-          res.status(503).json({ 
-            error: "Python Backend Unreachable", 
-            details: "The MT5 Engine is initializing or failed to start. Check server logs." 
-          });
+          if (!res.headersSent) {
+            res.status(503).json({ 
+              error: "Python Backend Unreachable", 
+              details: "The MT5 Engine is initializing or failed to start. Check server logs." 
+            });
+          }
         }
       }
     })

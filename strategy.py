@@ -148,6 +148,8 @@ class StraddleStrategy:
         self.system_halted = False
         self.risk_multiplier = 1.0
         self.consecutive_losses = 0
+        self.oco_lock = False
+        self.execution_lock = False
         self.stats = {
             "total_trades": 0,
             "wins": 0,
@@ -157,8 +159,10 @@ class StraddleStrategy:
             "loss_r_sum": 0.0
         }
         self.r_values = []
+        self.current_range = None
+        self.active_trade = None
         self.save_state()
-        self.add_log("System state fully purged and recalibrated for new account.")
+        self.add_log("SYSTEM PURGE: Account switch detected. All risk limits and stats recalibrated.")
 
     def update_spread_rolling(self, current_spread):
         self.spread_history.append(current_spread)
@@ -845,12 +849,23 @@ class StraddleStrategy:
             self.execution_lock = False
             return
 
-        # Post-placement Verification (Phantom Fill Guard)
-        time.sleep(0.5) # Brief pause for MT5 sync
-        live_orders = self.connector.get_orders()
-        matched_live = [o for o in live_orders if o.magic == self.connector.magic] if live_orders else []
-        actual_count = len(matched_live)
-        
+        # Post-placement Verification (Institutional Wait Loop)
+        verified = False
+        matched_live = []
+        for attempt in range(5): # Up to 2.5 seconds of verification window
+            time.sleep(0.5)
+            live_orders = self.connector.get_orders()
+            matched_live = [o for o in live_orders if o.magic == self.connector.magic] if live_orders else []
+            if len(matched_live) >= 2:
+                verified = True
+                break
+            
+        if not verified:
+            print(f"CRITICAL: Placement verification delay (Found {len(matched_live)}/2). Resetting for re-sync.")
+            self.execution_lock = False
+            self.save_state()
+            return
+
         # PROOF 2: Stop Loss Verification on Pending Orders
         for o in matched_live:
             if o.sl == 0:
@@ -859,14 +874,6 @@ class StraddleStrategy:
                 self.execution_lock = False
                 return
 
-        if actual_count == 0:
-            print("CRITICAL: Placement verification failed (Phantom Fill) → Resetting lock.")
-            self.execution_lock = False
-            self.stats["consecutive_failures"] = self.stats.get("consecutive_failures", 0) + 1
-            if self.stats["consecutive_failures"] >= 3:
-                self.system_halted = True
-        else:
-            self.stats["consecutive_failures"] = 0
-            print(f"Verified {actual_count} orders in book.")
+        print(f"Verified {len(matched_live)} orders in book.")
             
         self.save_state()
