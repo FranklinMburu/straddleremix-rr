@@ -255,8 +255,8 @@ export default function App() {
               label="Active Risk" 
               value={`${data?.account.total_risk_pct.toFixed(2)}%`} 
               icon={<ShieldCheck className="w-4 h-4" />} 
-              sub={`Limit: ${(0.05 * 100).toFixed(0)}% | Safe`}
-              color={ (data?.account.total_risk_pct || 0) > 4 ? "rose" : "emerald" }
+              sub={`Max Exposure: ${data?.account.risk_limit_pct.toFixed(0)}%`}
+              color={ (data?.account.total_risk_pct || 0) > (data?.account.risk_limit_pct || 5) ? "rose" : "emerald" }
               verified={!data?.account.account_mismatch}
             />
             <MetricBox 
@@ -283,11 +283,11 @@ export default function App() {
               <div className="flex justify-between items-start mb-12">
                 <div>
                   <h3 className="text-white text-3xl font-black tracking-tighter mb-1 uppercase italic">Range Dynamics</h3>
-                  <p className="text-xs text-slate-500 font-bold tracking-widest uppercase">M1 Lookback: 6-Cycle</p>
+                  <p className="text-xs text-slate-500 font-bold tracking-widest uppercase">M1 Lookback: 6-Cycle | {data?.account.equity < 200 ? "Micro Account Mode Active" : "Standard Account Mode"}</p>
                 </div>
                 <div className="flex gap-4">
                    <div className="text-right">
-                     <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Risk Factor</p>
+                     <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Aggression Multiplier</p>
                      <p className="text-xl font-mono text-white font-black">x{data?.engine.risk_multiplier.toFixed(1)}</p>
                    </div>
                 </div>

@@ -70,6 +70,8 @@ async def get_status():
             "equity": acc.equity if acc else 0,
             "profit": acc.profit if acc else 0,
             "total_risk_pct": strategy.calculate_total_risk() * 100,
+            "risk_limit_pct": config.MAX_TOTAL_EXPOSURE * 100,
+            "base_risk_pct": config.RISK_PER_TRADE * 100,
             "login": getattr(acc, 'login', 'Unknown') if acc else 'Unknown',
             "expected_login": config.MT5_LOGIN,
             "account_mismatch": not connector.is_account_safe()

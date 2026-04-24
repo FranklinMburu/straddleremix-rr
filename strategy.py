@@ -27,6 +27,8 @@ class StraddleStrategy:
         self.oco_lock = False
         self.execution_lock = False
         self.range_history = []
+        self.failure_streak = 0
+        self.last_failure_time = 0
         self.candle_body_history = [] # For shock detection
         self.avg_candle_body = 0.0
         
@@ -112,7 +114,8 @@ class StraddleStrategy:
         if not self.connector.is_account_safe():
             acc = self.connector.get_account()
             actual_id = getattr(acc, 'login', 'Unknown')
-            self.add_log(f"🔴 SECURITY HALT: Terminal is on Account {actual_id}, but Config expects {config.MT5_LOGIN}.")
+            expected_id = config.MT5_LOGIN
+            self.add_log(f"🔴 SECURITY HALT: Terminal Account {actual_id} does not match Config {expected_id}.")
             self.add_log("Trading is blocked until accounts match.")
             self.system_halted = True
             return
@@ -208,7 +211,8 @@ class StraddleStrategy:
 
         # Risk amount based on equity and risk buffer
         # config.RISK_PER_TRADE = 0.02 (2%)
-        risk_amount = (effective_basis * config.RISK_PER_TRADE * self.risk_multiplier) / config.SLIPPAGE_RISK_BUFFER
+        risk_per_trade = config.RISK_PER_TRADE
+        risk_amount = (effective_basis * risk_per_trade * self.risk_multiplier) / config.SLIPPAGE_RISK_BUFFER
         
         sl_dist = abs(entry - sl)
         if sl_dist == 0: return sym_info.volume_min
@@ -216,8 +220,18 @@ class StraddleStrategy:
         # Standard FX/Metal lot formula: Lot = Risk / (Distance * Contract Size)
         raw_lot = risk_amount / (sl_dist * sym_info.trade_contract_size)
         
+        # Guard: If raw_lot is tiny relative to min_lot, account is too small for this SL distance
+        min_lot = sym_info.volume_min
+        if raw_lot < min_lot * 0.4:
+            # Re-calculating actual risk if we use min_lot
+            actual_risk_pct = (min_lot * sl_dist * sym_info.trade_contract_size) / effective_basis
+            if actual_risk_pct > (risk_per_trade * 2.5):
+                # If using min_lot results in > 5% risk when we wanted 2%, skip trade
+                print(f"⚠️ SKIPPING: Account too small for SL dist ({sl_dist/self.connector.point:.0f} pts). Required lot ({raw_lot:.4f}) < Min lot ({min_lot}). Estimated Risk: {actual_risk_pct:.2%}")
+                return 0 # Signal to skip
+        
         # Clamp to broker limits
-        lot = max(sym_info.volume_min, min(raw_lot, sym_info.volume_max))
+        lot = max(min_lot, min(raw_lot, sym_info.volume_max))
         
         return self.connector.round_volume(lot)
 
@@ -316,6 +330,10 @@ class StraddleStrategy:
             if self.shock_cooldown == 0: 
                 self.add_log("SHOCK: Stabilization complete.")
                 self.shock_mode = False
+            return False
+
+        # Persistent Failure Cooldown
+        if self.last_failure_time > 0 and (time.time() - self.last_failure_time < 300):
             return False
 
         # 3. Daily Loss Limit
@@ -833,6 +851,9 @@ class StraddleStrategy:
         self.save_state()
 
         lot = self.calculate_lot_size(buy_p, buy_sl)
+        if lot <= 0:
+            return  # Account too small for this setup
+
         tick = self.connector.get_tick()
         spread_pts = (tick.ask - tick.bid) / self.connector.point
         dev = int(spread_pts) + 10
@@ -865,6 +886,8 @@ class StraddleStrategy:
 
         if buy_ok and sell_ok:
             self.execution_lock = True
+            self.failure_streak = 0 # Reset on success
+            self.last_failure_time = 0
             self.add_log(f"EXEC: Pending straddle placed (Size: {lot} lots @ {buy_p:.5f} / {sell_p:.5f})")
             self.save_state()
             print(f"BUY STOP @ {buy_p:.2f} | SL: {buy_sl:.2f} | TP: {buy_tp:.2f}")
@@ -872,6 +895,14 @@ class StraddleStrategy:
             print(f"Spread: {spread_pts:.0f} | Multiplier: {self.risk_multiplier*100:.0f}% | LOT: {lot}")
         else:
             self.add_log(f"ERROR: Straddle placement failed. Buy: {res_buy.retcode if res_buy else 'None'} | Sell: {res_sell.retcode if res_sell else 'None'}")
+            
+            # Failure streak handling
+            self.failure_streak += 1
+            if self.failure_streak >= 5:
+                self.add_log(f"CRITICAL: Persistent Rejections ({self.failure_streak}). Activating 5-min cooldown.")
+                self.last_failure_time = time.time()
+                self.failure_streak = 0 # Reset but the cooldown in check_survival_rules will catch it
+            
             # If one side failed, try to clear the other side to avoid unhedged state
             self.connector.cancel_all_pending()
             self.execution_lock = False

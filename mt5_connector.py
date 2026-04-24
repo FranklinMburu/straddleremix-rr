@@ -56,15 +56,20 @@ class MT5Connector:
             return True
             
         import config
-        print("🔌 Connecting to MT5...")
+        login_val = config.get_int_env("MT5_LOGIN", 0)
+        if login_val == 0:
+            print("❌ CRITICAL ERROR: MT5_LOGIN not found in environment or set to 0.")
+            print("   For multi-user safety, you MUST define the target account in your .env file.")
+            return False
+
+        print(f"🔌 Connecting to MT5 Account {login_val}...")
         # Attempt to initialize with credentials
         if not mt5.initialize(
-            login=config.MT5_LOGIN, 
+            login=login_val, 
             password=config.MT5_PASSWORD, 
             server=config.MT5_SERVER
         ):
-            print(f"❌ initialize() failed, error code = {mt5.last_error()}")
-            print("Note: This library requires Windows and a local MT5 Terminal.")
+            print(f"❌ initialize() failed for account {login_val}, error code = {mt5.last_error()}")
             return False
         
         # Immediate Account Verification
@@ -74,35 +79,41 @@ class MT5Connector:
             return False
             
         actual_login = getattr(acc, 'login', 0)
-        expected_login = config.MT5_LOGIN
         
         print(f"✅ MT5 Connected Successfully to {config.MT5_SERVER}")
         print(f"📊 Live MT5 Terminal Account: {actual_login}")
         
-        if expected_login != 0 and actual_login != expected_login:
+        if actual_login != login_val:
             print(f"🔴 CRITICAL ERROR: Account mismatch!")
-            print(f"   Configured: {expected_login}")
-            print(f"   Actual Terminal Account: {actual_login}")
-            print("   Trading will be BLOCKED until you switch the Terminal to the correct account.")
-            self.connected = False # Don't consider it connected if the account is wrong
+            print(f"   Requested (Env): {login_val}")
+            print(f"   Actual Terminal: {actual_login}")
+            print("   Trading is BLOCKED. Switch your MT5 Desktop Terminal to the correct account.")
+            self.connected = False 
             return False
             
         self.connected = True
         return True
 
     def is_account_safe(self):
-        """Strict check to ensure we are STILL on the correct account before any trade action"""
+        """Strict check to ensure we are STILL on the correct account and connected before any trade action"""
         if self.mock_mode: return True
         if not MT5_AVAILABLE: return False
         
         import config
+        # 1. Connection check
+        terminal_info = mt5.terminal_info()
+        if not terminal_info or not terminal_info.connected:
+            return False
+
+        # 2. Account check
         acc = mt5.account_info()
         if not acc: return False
         
         actual_login = getattr(acc, 'login', 0)
-        expected_login = config.MT5_LOGIN
+        expected_login = config.get_int_env("MT5_LOGIN", 0)
         
-        if expected_login != 0 and actual_login != expected_login:
+        if expected_login == 0: return False # Must be defined
+        if actual_login != expected_login:
             return False
         return True
 
@@ -114,6 +125,7 @@ class MT5Connector:
         print(f"🔍 Resolving symbol: {self.symbol}...")
         symbol_info = mt5.symbol_info(self.symbol)
         if symbol_info is None:
+            # ... (rest of the variants check)
             print(f"  ⚠️  {self.symbol} not found, searching for alternatives...")
             
             # Try common variants first (faster than getting all symbols)
@@ -153,11 +165,21 @@ class MT5Connector:
                     print(f"  ❌ Error: No symbols found matching {base}.")
                     return None
         
-        # Ensure symbol is active in Market Watch
+        # Ensure symbol is active in Market Watch and has quotes
         print(f"  📡 Enabling symbol in Market Watch...")
         if not mt5.symbol_select(self.symbol, True):
             print(f"  ⚠️  Warning: Could not select {self.symbol}")
         
+        # Quote Warm-up (Wait for first tick to avoid 10027)
+        print("  ⏳ Waiting for quote synchronization...")
+        warm_up_start = time.time()
+        while time.time() - warm_up_start < 5.0:
+            tick = mt5.symbol_info_tick(self.symbol)
+            if tick and tick.bid > 0 and tick.ask > 0:
+                print(f"  ✅ Quote Received: Bid={tick.bid}, Ask={tick.ask}")
+                break
+            time.sleep(0.5)
+            
         info = mt5.symbol_info(self.symbol)
         if info is None:
             print(f"  ❌ Critical error: could not fetch info for {self.symbol}")
@@ -165,7 +187,8 @@ class MT5Connector:
             
         self.point = info.point
         self.digits = info.digits
-        print(f"  ✅ Symbol resolved to: {self.symbol} (Point: {self.point})")
+        print(f"  ✅ Symbol resolved: {self.symbol} (Digits: {self.digits})")
+        print(f"  📊 Broker Limits: Stops Level={info.trade_stops_level}, Freeze Level={info.trade_freeze_level}")
         return self.symbol
 
     def get_tick(self):
@@ -177,7 +200,15 @@ class MT5Connector:
             t.ask = self._mock_price + 0.0001
             t.time = int(time.time())
             return t
-        return mt5.symbol_info_tick(self.symbol)
+        
+        # Hard Force Refresh for real MT5
+        tick = mt5.symbol_info_tick(self.symbol)
+        if tick is None or tick.bid <= 0:
+            # Try to force a data pump
+            mt5.copy_rates_from_pos(self.symbol, mt5.TIMEFRAME_M1, 0, 1)
+            tick = mt5.symbol_info_tick(self.symbol)
+            
+        return tick
 
     def get_m1_candles(self, count):
         if self.mock_mode:
@@ -191,16 +222,24 @@ class MT5Connector:
             
         return mt5.copy_rates_from_pos(self.symbol, mt5.TIMEFRAME_M1, 1, count)
 
-    def place_order(self, order_type, price, sl, tp, lot, deviation=10):
+    def place_order(self, order_type, price, sl, tp, lot, deviation=15):
         if self.trade_lock: return None
         if not self.is_account_safe():
-            print("❌ BLOCKED: Operation aborted due to account mismatch.")
+            print("❌ BLOCKED: Operation aborted due to account/connection failure.")
             return None
         self.trade_lock = True
         
         # Ensure volume is rounded correctly
         lot = self.round_volume(lot)
         
+        # 1. Verification of quotes (Error 10027 mitigation)
+        tick = self.get_tick()
+        if not tick or tick.bid <= 0:
+            print(f"❌ BLOCKED: No valid quotes for {self.symbol} after retry. (Error 10027 Guard)")
+            self.trade_lock = False
+            return None
+            
+        # Mock logic
         if self.mock_mode:
             ticket = random.randint(1000000, 9999999)
             class Order:
@@ -231,30 +270,45 @@ class MT5Connector:
             r.order = ticket
             return r
 
+        # 2. Institutional Rounding
+        p_final = float(round(price, self.digits))
+        sl_final = float(round(sl, self.digits))
+        tp_final = float(round(tp, self.digits))
+
         try:
             request = {
                 "action": mt5.TRADE_ACTION_PENDING,
                 "symbol": self.symbol,
                 "volume": float(lot),
                 "type": order_type,
-                "price": float(round(price, self.digits)),
-                "sl": float(round(sl, self.digits)),
-                "tp": float(round(tp, self.digits)),
+                "price": p_final,
+                "sl": sl_final,
+                "tp": tp_final,
                 "deviation": int(deviation),
                 "magic": int(self.magic),
-                "comment": "Straddle Engine",
+                "comment": "Straddle Engine v1.0",
                 "type_time": mt5.ORDER_TIME_GTC,
                 "type_filling": mt5.ORDER_FILLING_RETURN,
             }
-            res = mt5.order_send(request)
-            if res is None:
-                print(f"MT5: order_send returned None for {order_type} on {self.symbol}. Terminal might be disconnected.")
-                return None
-                
-            if res.retcode != mt5.TRADE_RETCODE_DONE:
-                print(f"MT5 REJECTION: Request ({order_type} @ {price}) failed with retcode {res.retcode}.")
-                print(f"MT5 ERROR: {mt5.last_error()}")
-                # Common errors: 10015 (Invalid stops), 10027 (No quotes), 10018 (Market closed)
+            
+            # Retry Loop for 10027
+            for attempt in range(3):
+                res = mt5.order_send(request)
+                if res is None:
+                    print(f"MT5: order_send returned None. Terminal disconnect suspected.")
+                    break
+                    
+                if res.retcode == mt5.TRADE_RETCODE_DONE:
+                    return res
+                elif res.retcode == 10027:
+                    print(f"MT5: Error 10027 (No Prices). Pumping data and retrying ({attempt+1}/3)...")
+                    mt5.copy_rates_from_pos(self.symbol, mt5.TIMEFRAME_M1, 0, 1)
+                    time.sleep(0.1)
+                else:
+                    # Other errors like 10015 (Stops) should fail immediately to avoid loop
+                    print(f"MT5 REJECTION: Request ({order_type} @ {p_final}) failed: {res.retcode}.")
+                    print(f"MT5 ERROR: {mt5.last_error()}")
+                    break
             return res
         except Exception as e:
             print(f"MT5 Exception in place_order: {e}")

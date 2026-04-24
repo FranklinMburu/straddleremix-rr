@@ -23,12 +23,12 @@ MAGIC_NUMBER = 123456
 LOOP_SLEEP = 0.5
 
 # RISK CONTROLS
-RISK_PER_TRADE = 0.02          # 2% per trade
-SLIPPAGE_RISK_BUFFER = 1.2     # Account for 20% extra risk due to slippage/gaps
-MAX_TOTAL_EXPOSURE = 0.05      # 5% max open risk
-DAILY_LOSS_LIMIT = 0.08        # 8% stop trading
-MAX_DRAWDOWN_STOP = 0.15       # 15% Hard stop
-SOFT_DRAWDOWN_LIMIT = 0.10     # 10% Risk reduction
+RISK_PER_TRADE = 0.04          # 4% per trade (Recommended for $100+ accounts on Gold)
+SLIPPAGE_RISK_BUFFER = 1.1     # Tightened slightly for small account efficiency
+MAX_TOTAL_EXPOSURE = 0.10      # 10% max open risk
+DAILY_LOSS_LIMIT = 0.10        # 10% stop trading
+MAX_DRAWDOWN_STOP = 0.20       # 20% Hard stop
+SOFT_DRAWDOWN_LIMIT = 0.12     # 12% Risk reduction
 
 # VALIDATION LAYER
 MIN_EXPECTANCY_THRESHOLD = 0.0 # Must be positive
